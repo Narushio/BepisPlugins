@@ -5,6 +5,7 @@ namespace Shared
     internal class LazyCustom<T>
     {
         private T _object;
+        private bool _initialized;
         private Func<T> Factory { get; set; }
 
         private LazyCustom(Func<T> factory) => Factory = factory;
@@ -21,7 +22,16 @@ namespace Shared
         public void Initialize()
         {
             if (_object == null || _object.ToString() == "null")
+            {
                 _object = Factory();
+                _initialized = true;
+            }
+        }
+
+        public bool TryGetCreated(out T value)
+        {
+            value = _object;
+            return _initialized;
         }
 
         public static implicit operator T(LazyCustom<T> lazy) => lazy.Instance;

@@ -26,7 +26,15 @@ namespace Sideloader
     /// <summary>
     /// Allows for loading mods in .zip format from the mods folder and automatically resolves ID conflicts.
     /// </summary>
+#if KK && LEGACY_RUNTIME
+    // Compatibility build for older Koikatu packs. The API surface used below already exists in Extended Save r18.2.
+    [BepInDependency(ExtensibleSaveFormat.ExtendedSave.GUID, "18.2.0.3")]
+#elif KK
+    // Keep this local fork compatible with the ExtensibleSaveFormat version already shipped in the target game.
+    [BepInDependency(ExtensibleSaveFormat.ExtendedSave.GUID, "21.1.2")]
+#else
     [BepInDependency(ExtensibleSaveFormat.ExtendedSave.GUID, ExtensibleSaveFormat.ExtendedSave.Version)]
+#endif
     [BepInDependency(XUnity.ResourceRedirector.Constants.PluginData.Identifier, XUnity.ResourceRedirector.Constants.PluginData.Version)]
     [BepInPlugin(GUID, PluginName, Version)]
     public partial class Sideloader
@@ -65,6 +73,14 @@ namespace Sideloader
         internal static ConfigEntry<bool> MigrationEnabled { get; private set; }
         internal static ConfigEntry<string> AdditionalModsDirectory { get; private set; }
         internal static ConfigEntry<bool> CachingEnabled { get; private set; }
+        internal static ConfigEntry<bool> HotReloadEnabled { get; private set; }
+        internal static ConfigEntry<bool> HotReloadRefreshShadersAndDynamicBones { get; private set; }
+        internal static ConfigEntry<KeyboardShortcut> HotReloadShortcut { get; private set; }
+        internal static ConfigEntry<int> HotReloadBundleCacheSizeGB { get; private set; }
+        internal static ConfigEntry<int> HotReloadBundleCacheRetentionDays { get; private set; }
+
+        private bool _hotReloadInProgress;
+        private int _hotReloadPendingAssetRefreshes;
 
         [UsedImplicitly]
         private void Awake()
@@ -103,6 +119,24 @@ namespace Sideloader
                 "Additional directory to load zipmods from.");
             CachingEnabled = Config.Bind("General", "Cache zipmod metadata", true,
                 "Drastically speeds up game startup speed, especially on slow HDDs, by not parsing zipmods unless they get changed. Disable to force sideloader to always read and parse all zipmods.");
+            HotReloadEnabled = Config.Bind("Hot Reload", "Enable zipmod hot reload", true,
+                "Apply added, replaced, and removed .zipmod archives while Koikatu or CharaStudio is running. Active character parts, accessories, and Studio items using affected resolved slots are refreshed selectively.");
+            HotReloadRefreshShadersAndDynamicBones = Config.Bind("Hot Reload",
+                "Restore MaterialEditor shaders and Dynamic Bones", true,
+                "After replacing live Koikatu assets, restore MaterialEditor and ShaderSwapper state, reapply DynamicBoneEditor settings, and reinitialize Dynamic Bones. Disable this compatibility bridge if an older related plugin reports errors.");
+            HotReloadShortcut = Config.Bind("Hot Reload", "Reload zipmods", new KeyboardShortcut(KeyCode.F6, KeyCode.LeftControl),
+                "Scan the Koikatu Mods folders and apply added, replaced, and removed .zipmod archives. Character Cards, Coordinate Cards, and the current CharaStudio scene are not reloaded.");
+            HotReloadBundleCacheSizeGB = Config.Bind("Hot Reload", "Bundle disk cache size GB", 10,
+                new ConfigDescription(
+                    "Maximum target size of the content-versioned AssetBundle shadow cache. The cache keeps Unity from locking zipmods and is pruned least-recently-used. A single bundle larger than the limit is still allowed. Restart required.",
+                    new AcceptableValueRange<int>(1, 100)));
+            HotReloadBundleCacheRetentionDays = Config.Bind("Hot Reload", "Bundle disk cache retention days", 30,
+                new ConfigDescription(
+                    "Remove unused AssetBundle shadow files older than this many days at startup. Set to 0 to disable age-based cleanup; the size limit still applies. Restart required.",
+                    new AcceptableValueRange<int>(0, 3650)));
+            InitializeHotReloadGui();
+
+            BundleDiskCache.Initialize(HotReloadBundleCacheSizeGB.Value, HotReloadBundleCacheRetentionDays.Value);
 
             if (!Directory.Exists(ModsDirectory))
                 Logger.LogWarning("Could not find the mods directory: " + ModsDirectory);
@@ -111,6 +145,16 @@ namespace Sideloader
                 Logger.LogWarning("Could not find the additional mods directory specified in config: " + AdditionalModsDirectory.Value);
 
             LoadModsFromDirectories(ModsDirectory, AdditionalModsDirectory.Value);
+        }
+
+        [UsedImplicitly]
+        private void Update()
+        {
+            HandleHotReloadGuiInput();
+            var guiRequested = !_hotReloadInProgress && ConsumeHotReloadGuiRequest();
+            if (!_hotReloadInProgress && HotReloadEnabled.Value &&
+                (HotReloadShortcut.Value.IsDown() || guiRequested))
+                StartCoroutine(ReloadZipmodsWithGuiFeedback());
         }
 
         #region Data loading
@@ -262,7 +306,14 @@ namespace Sideloader
 
                 var waitedFor = Stopwatch.StartNew();
                 var loadedSoFar = 0;
+#if KK && LEGACY_RUNTIME
+                // The r18.2-era Sideloader capped archive parsing at three workers. Keep that
+                // limit on the legacy runtime: parsing thousands of cache misses with one worker
+                // per logical CPU can overwhelm Koikatu's old Mono runtime and crash natively.
+                needToBeLoaded.RunParallel(LoadingThread, 3).Do(success =>
+#else
                 needToBeLoaded.RunParallel(LoadingThread).Do(success =>
+#endif
                 {
                     // This method is meant to ensure there is always something logged to show that loading is still ongoing
                     // Doing this also ensures that BepInEx.SplashScreen does not time out thinking the game has hung
@@ -481,7 +532,7 @@ namespace Sideloader
             }
         }
 
-        private static void AddBundles(ICollection<BundleLoadInfo> bundleInfos)
+        private static void AddBundles(ICollection<BundleLoadInfo> bundleInfos, Dictionary<string, int> preferredIndexes = null)
         {
             // If using debug logging, look for duplicate override bundles
             if (DebugLoggingModLoading.Value)
@@ -500,7 +551,14 @@ namespace Sideloader
 
             foreach (var bundleLoadInfo in bundleInfos)
             {
-                BundleManager.AddBundleLoader(bundleLoadInfo.LoadBundle, bundleLoadInfo.BundleTrimmedPath);
+                var preferredIndex = -1;
+                if (preferredIndexes != null && preferredIndexes.TryGetValue(bundleLoadInfo.BundleTrimmedPath, out var index))
+                {
+                    preferredIndex = index;
+                    preferredIndexes[bundleLoadInfo.BundleTrimmedPath] = index + 1;
+                }
+
+                BundleManager.AddBundleLoader(bundleLoadInfo.LoadBundle, bundleLoadInfo.BundleTrimmedPath, bundleLoadInfo.ArchiveFilename, preferredIndex);
             }
         }
 
@@ -556,25 +614,42 @@ namespace Sideloader
             //Only search the archives for a .png that can actually be found
             if (PngList.TryGetValue(pngPath, out ZipmodInfo zipmod))
             {
-                var archive = zipmod.GetZipFile();
-                var entry = archive.GetEntry(pngPath);
-
-                if (entry != null)
+                try
                 {
-                    // Load png byte data from the archive and load it into a new texture
-                    var stream = archive.GetInputStream(entry);
-                    var fileLength = (int)entry.Size;
-                    var buffer = new byte[fileLength];
-                    _ = stream.Read(buffer, 0, fileLength);
-                    var tex = new Texture2D(2, 2, format, mipmap);
-                    tex.LoadImage(buffer);
+                    var archive = zipmod.GetZipFile();
+                    var entry = archive.GetEntry(pngPath);
 
-                    if (pngPath.Contains("clamp"))
-                        tex.wrapMode = TextureWrapMode.Clamp;
-                    else if (pngPath.Contains("repeat"))
-                        tex.wrapMode = TextureWrapMode.Repeat;
+                    if (entry != null)
+                    {
+                        // Load png byte data from the archive and load it into a new texture
+                        var fileLength = checked((int)entry.Size);
+                        var buffer = new byte[fileLength];
+                        using (var stream = archive.GetInputStream(entry))
+                        {
+                            var bytesRead = 0;
+                            while (bytesRead < fileLength)
+                            {
+                                var read = stream.Read(buffer, bytesRead, fileLength - bytesRead);
+                                if (read == 0)
+                                    throw new EndOfStreamException($"Unexpected end of zipmod entry {pngPath}");
+                                bytesRead += read;
+                            }
+                        }
 
-                    return tex;
+                        var tex = new Texture2D(2, 2, format, mipmap);
+                        tex.LoadImage(buffer);
+
+                        if (pngPath.Contains("clamp"))
+                            tex.wrapMode = TextureWrapMode.Clamp;
+                        else if (pngPath.Contains("repeat"))
+                            tex.wrapMode = TextureWrapMode.Repeat;
+
+                        return tex;
+                    }
+                }
+                finally
+                {
+                    zipmod.Dispose();
                 }
             }
 
@@ -631,7 +706,9 @@ namespace Sideloader
 
         private void RedirectHook(IAssetLoadingContext context)
         {
-            if (context.Parameters.Name == null || context.Bundle.name == null) return;
+            // A hot-reload cache eviction can leave third-party callers holding Unity's
+            // destroyed-object sentinel briefly. Never dereference it as a live bundle.
+            if (context.Parameters.Name == null || context.Bundle == null || context.Bundle.name == null) return;
 
             if (typeof(Texture).IsAssignableFrom(context.Parameters.Type))
             {
@@ -677,9 +754,17 @@ namespace Sideloader
             {
                 if (BundleManager.Bundles.TryGetValue(bundle, out List<LazyCustom<AssetBundle>> lazyList))
                 {
-                    context.Bundle = lazyList[0].Instance;
-                    context.Bundle.name = bundle;
-                    context.Complete();
+                    var loadedBundle = lazyList.Count > 0 ? lazyList[0].Instance : null;
+                    if (loadedBundle != null)
+                    {
+                        context.Bundle = loadedBundle;
+                        context.Bundle.name = bundle;
+                        context.Complete();
+                    }
+                    else
+                    {
+                        Logger.LogError($"Sideloader asset bundle [{bundle}] could not be loaded");
+                    }
                 }
                 else
                 {
@@ -771,8 +856,11 @@ namespace Sideloader
                     });
                 }
 
-                File.WriteAllText(_CachePath + ".ver", Info.Metadata.Version.ToString());
                 wait.WaitOne();
+                // Mark the cache as current only after every part has been written. If the game
+                // exits during serialization, the next startup must regenerate instead of trying
+                // to deserialize incomplete files as a valid cache.
+                File.WriteAllText(_CachePath + ".ver", Info.Metadata.Version.ToString());
                 Logger.LogDebug($"Saved zipmod cache to \"{_CachePath}\" in {swCacheWrite.ElapsedMilliseconds}ms using {threadCount} threads");
             }
             catch (Exception e)

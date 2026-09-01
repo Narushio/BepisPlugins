@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using Sideloader.AutoResolver;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -29,6 +30,7 @@ namespace Sideloader.ListLoader
 #endif
 
         internal static List<ChaListData> ExternalDataList { get; private set; } = new List<ChaListData>();
+        internal static ChaListControl CurrentInstance { get; private set; }
         //AssetBundle/AssetName/ExcelData
         internal static Dictionary<string, Dictionary<string, ExcelData>> ExternalExcelData { get; private set; } = new Dictionary<string, Dictionary<string, ExcelData>>();
 
@@ -38,6 +40,7 @@ namespace Sideloader.ListLoader
 
         internal static void LoadAllLists(ChaListControl instance)
         {
+            CurrentInstance = instance;
 #if KK || EC || KKS
             InternalDataList = r_dictListInfo.GetValue<Dictionary<ChaListDefine.CategoryNo, Dictionary<int, ListInfoBase>>>(instance);
 #elif AI || HS2
@@ -48,6 +51,30 @@ namespace Sideloader.ListLoader
                 LoadList(instance, data);
 
             instance.LoadItemID();
+        }
+
+        internal static bool ApplyHotReloadedLists(IEnumerable<ResolveInfo> removedResolveInfos, IEnumerable<ChaListData> lists)
+        {
+            if (CurrentInstance == null)
+                return false;
+
+            foreach (var info in removedResolveInfos
+                         .GroupBy(x => new { x.CategoryNo, x.LocalSlot })
+                         .Select(x => x.First()))
+            {
+#if KK || EC || KKS
+                if (InternalDataList.TryGetValue(info.CategoryNo, out var category))
+                    category.Remove(info.LocalSlot);
+#elif AI || HS2
+                if (InternalDataList.TryGetValue((int)info.CategoryNo, out var category))
+                    category.Remove(info.LocalSlot);
+#endif
+            }
+
+            foreach (var data in lists)
+                CurrentInstance.LoadList(data);
+
+            return true;
         }
 
         internal static void LoadList(this ChaListControl instance, ChaListData data) => LoadList(instance, (ChaListDefine.CategoryNo)data.categoryNo, data);

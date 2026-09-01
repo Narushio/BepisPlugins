@@ -5,6 +5,7 @@
 		<RootNamespace>ExtensibleSaveFormat</RootNamespace>
 		<AssemblyName>ExtensibleSaveFormat</AssemblyName>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<BepInExPackageVersion Condition="'$(BepInExPackageVersion)' == ''">5.4.22</BepInExPackageVersion>
 		<!-- NuGet packaging properties -->
 		<IsPackable>true</IsPackable>
 		<PackageId>ExtensibleSaveFormat.Koikatu</PackageId>
@@ -19,7 +20,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="IllusionLibs.BepInEx" Version="5.4.22" />
+		<PackageReference Include="IllusionLibs.BepInEx" Version="$(BepInExPackageVersion)" />
 		<PackageReference Include="IllusionLibs.Koikatu.Assembly-CSharp" Version="2019.4.27.4" />
 		<PackageReference Include="IllusionLibs.Koikatu.Assembly-CSharp-firstpass" Version="2019.4.27.4" />
 		<PackageReference Include="IllusionLibs.Koikatu.UnityEngine" Version="5.6.2.4" />

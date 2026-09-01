@@ -27,6 +27,9 @@ namespace Sideloader.AutoResolver
 
         private static ILookup<int, ResolveInfo> _resolveInfoLookupSlot;
         private static ILookup<int, ResolveInfo> _resolveInfoLookupLocalSlot;
+        private static ResolveInfo[] _saveOnlyResolutionInfo = new ResolveInfo[0];
+        private static readonly IEqualityComparer<ResolveInfo> LocalResolveIdentityComparer =
+            new ResolveInfoLocalIdentityComparer();
         private static ILookup<string, MigrationInfo> _migrationInfoLookupGUID;
         private static ILookup<int, MigrationInfo> _migrationInfoLookupSlot;
 #if AI || HS2
@@ -66,6 +69,11 @@ namespace Sideloader.AutoResolver
         /// Use TryGetResolutionInfo if you need to find a specific item since it's much faster.
         /// </summary>
         public static IEnumerable<ResolveInfo> LoadedResolutionInfo { get; private set; } = new ResolveInfo[0];
+        /// <summary>
+        /// Resolver entries retained only so already-instantiated assets from a removed zipmod can still be
+        /// written back to a card. They must never participate in GUID/original-slot resolution while loading.
+        /// </summary>
+        internal static IEnumerable<ResolveInfo> SaveOnlyResolutionInfo => _saveOnlyResolutionInfo;
         /// <summary>
         /// Get the ResolveInfo for an item
         /// </summary>
@@ -165,9 +173,51 @@ namespace Sideloader.AutoResolver
 
         internal static void SetResolveInfos(ICollection<ResolveInfo> results)
         {
+            SetResolveInfos(results, new ResolveInfo[0]);
+        }
+
+        internal static void SetResolveInfos(ICollection<ResolveInfo> results,
+            ICollection<ResolveInfo> saveOnlyResults)
+        {
+            // Loading a Character Card or Coordinate Card starts with the original zipmod slot and GUID, so
+            // that lookup must contain active definitions only. Saving starts with the resolved LocalSlot and
+            // may still encounter a live object whose archive was removed; include the save-only entries in
+            // that direction to preserve its Extended Save marker without advertising the mod as loadable.
             _resolveInfoLookupSlot = results.ToLookup(info => info.Slot);
-            _resolveInfoLookupLocalSlot = results.ToLookup(info => info.LocalSlot);
+            var activeLocalSlots = new HashSet<ResolveInfo>(results, LocalResolveIdentityComparer);
+            _saveOnlyResolutionInfo = (saveOnlyResults ?? new ResolveInfo[0])
+                // A re-added definition can reclaim its former LocalSlot. Never leave its tombstone beside
+                // the active entry: card/coordinate load and later hot reload passes must see one owner only.
+                .Where(info => !activeLocalSlots.Contains(info))
+                .Distinct(LocalResolveIdentityComparer)
+                .ToArray();
+            _resolveInfoLookupLocalSlot = results.Concat(_saveOnlyResolutionInfo)
+                .ToLookup(info => info.LocalSlot);
             LoadedResolutionInfo = results;
+        }
+
+        private sealed class ResolveInfoLocalIdentityComparer : IEqualityComparer<ResolveInfo>
+        {
+            public bool Equals(ResolveInfo left, ResolveInfo right)
+            {
+                if (ReferenceEquals(left, right)) return true;
+                if (ReferenceEquals(left, null) || ReferenceEquals(right, null)) return false;
+                return left.LocalSlot == right.LocalSlot &&
+                       left.CategoryNo == right.CategoryNo &&
+                       string.Equals(left.Property, right.Property, StringComparison.Ordinal);
+            }
+
+            public int GetHashCode(ResolveInfo value)
+            {
+                if (ReferenceEquals(value, null)) return 0;
+                unchecked
+                {
+                    var hash = value.LocalSlot;
+                    hash = (hash * 397) ^ value.CategoryNo.GetHashCode();
+                    hash = (hash * 397) ^ StringComparer.Ordinal.GetHashCode(value.Property ?? string.Empty);
+                    return hash;
+                }
+            }
         }
         internal static void SetMigrationInfos(ICollection<MigrationInfo> results)
         {

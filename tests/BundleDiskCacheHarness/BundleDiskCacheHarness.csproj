@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\Core_Sideloader\Core.Sideloader.BundleDiskCache.cs" Link="Core.Sideloader.BundleDiskCache.cs" />
+    <Reference Include="ICSharpCode.SharpZipLib">
+      <HintPath>..\..\bin\BepInEx\plugins\KK_BepisPlugins\ICSharpCode.SharpZipLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <!-- The repository normally strips copied references from plugin outputs; the executable harness needs SharpZipLib beside it. -->
+  <Target Name="SkipAllRefs" />
+</Project>

@@ -5,6 +5,9 @@
 		<RootNamespace>Sideloader</RootNamespace>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<AssemblyName>Sideloader</AssemblyName>
+		<InformationalVersion>$(Version)-hotreload</InformationalVersion>
+    <Copyright>Copyright (c) 2019 IllusionMods - Hot Reload additions by Narushio</Copyright>
+		<BepInExPackageVersion Condition="'$(BepInExPackageVersion)' == ''">5.4.22</BepInExPackageVersion>
 		<!-- NuGet packaging properties -->
 		<IsPackable>true</IsPackable>
 		<PackageId>Sideloader.Koikatu</PackageId>
@@ -18,6 +21,12 @@
 		<RepositoryType>git</RepositoryType>
 	</PropertyGroup>
 
+	<PropertyGroup Condition="'$(LegacyRuntime)' == 'true'">
+		<DefineConstants>$(DefineConstants);LEGACY_RUNTIME</DefineConstants>
+		<OutputPath>..\..\bin\legacy-bepinex5.4.19-extsave18.2.0.3\BepInEx\plugins\KK_BepisPlugins\</OutputPath>
+		<InformationalVersion>$(Version)-hotreload-bepinex5.4.19-extsave18.2.0.3</InformationalVersion>
+	</PropertyGroup>
+
 	<ItemGroup>
 		<ProjectReference Include="..\KK_ExtensibleSaveFormat\KK_ExtensibleSaveFormat.csproj">
 			<IncludeAssets>none</IncludeAssets>
@@ -25,7 +34,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="IllusionLibs.BepInEx" Version="5.4.22">
+		<PackageReference Include="IllusionLibs.BepInEx" Version="$(BepInExPackageVersion)">
 			<IncludeAssets>compile</IncludeAssets>
 			<PrivateAssets>all</PrivateAssets>
 		</PackageReference>

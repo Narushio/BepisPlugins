@@ -36,6 +36,7 @@ namespace Sideloader
 #endif
 
         [IgnoreMember] private ZipFile _zipFile;
+        [IgnoreMember] private readonly object _zipFileSync = new object();
         [IgnoreMember] public bool Loaded;
         [IgnoreMember] public bool Valid => Manifest != null && Error == null;
 
@@ -54,22 +55,68 @@ namespace Sideloader
 
         public ZipFile GetZipFile()
         {
-            if (_zipFile == null)
+            lock (_zipFileSync)
             {
-                _zipFile = new ZipFile(FileName);
-            }
-            else if (_zipFile.Count == 0)
-            {
-                // Disposing makes entry count = 0, but it should be at least 1 for the manifest.
-                // Still try to dispose the old zipfile just to be safe.
-                _zipFile.Close();
-                _zipFile = new ZipFile(FileName);
-            }
+                if (_zipFile == null)
+                {
+                    _zipFile = OpenSharedZipFile();
+                }
+                else if (_zipFile.Count == 0)
+                {
+                    // Disposing makes entry count = 0, but it should be at least 1 for the manifest.
+                    // Still try to dispose the old zipfile just to be safe.
+                    _zipFile.Close();
+                    _zipFile = OpenSharedZipFile();
+                }
 
-            return _zipFile;
+                return _zipFile;
+            }
+        }
+
+        internal TResult WithZipFile<TResult>(Func<ZipFile, TResult> action)
+        {
+            if (action == null)
+                throw new ArgumentNullException(nameof(action));
+
+            lock (_zipFileSync)
+            {
+                var archive = GetZipFile();
+                try
+                {
+                    return action(archive);
+                }
+                finally
+                {
+                    DisposeZipFile();
+                }
+            }
+        }
+
+        private ZipFile OpenSharedZipFile()
+        {
+            // Keep reading the currently loaded archive while allowing a mod manager to atomically
+            // replace or delete its directory entry. The old stream remains valid until hot reload
+            // retires this ZipmodInfo, and new requests are routed to the replacement archive.
+            var stream = new FileStream(FileName, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            try
+            {
+                return new ZipFile(stream) { IsStreamOwner = true };
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
         }
 
         public void Dispose()
+        {
+            lock (_zipFileSync)
+                DisposeZipFile();
+        }
+
+        private void DisposeZipFile()
         {
             if (_zipFile != null)
             {
@@ -79,89 +126,105 @@ namespace Sideloader
         }
 
         private static readonly MethodInfo _LocateZipEntryMethodInfo = typeof(ZipFile).GetMethod("LocateEntry", AccessTools.all);
-        public void LoadAllLists()
+        public void LoadAllLists(bool strict = false)
         {
             var zipmod = this;
             var arc = zipmod.GetZipFile();
             var manifest = zipmod.Manifest;
 
-            foreach (ZipEntry entry in arc)
+            try
             {
-                var fullName = entry.Name;
-                // Find bundles in the archive
-                if (fullName.EndsWith(".unity3d", StringComparison.OrdinalIgnoreCase))
+                foreach (ZipEntry entry in arc)
                 {
-                    string assetBundlePath = fullName;
+                    var fullName = entry.Name;
+                    // Find bundles in the archive
+                    if (fullName.EndsWith(".unity3d", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string assetBundlePath = fullName;
 
-                    if (assetBundlePath.Contains('/'))
-                        assetBundlePath = assetBundlePath.Remove(0, assetBundlePath.IndexOf('/') + 1);
+                        if (assetBundlePath.Contains('/'))
+                            assetBundlePath = assetBundlePath.Remove(0, assetBundlePath.IndexOf('/') + 1);
 
-                    if (entry.CompressionMethod == CompressionMethod.Stored)
-                    {
-                        long index = (long)_LocateZipEntryMethodInfo.Invoke(arc, new object[] { entry });
-                        zipmod.BundleInfos.Add(new BundleLoadInfo(arc.Name, index, fullName, assetBundlePath));
-                    }
-                    else
-                    {
-                        zipmod.BundleInfos.Add(new BundleLoadInfo(arc.Name, -1, fullName, assetBundlePath));
-                    }
-                }
-                // Find all list files in the archive
-                else if (fullName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-                {
-                    try
-                    {
-                        if (fullName.StartsWith("abdata/list/characustom", StringComparison.OrdinalIgnoreCase))
+                        if (entry.CompressionMethod == CompressionMethod.Stored)
                         {
-                            var stream = arc.GetInputStream(entry);
-                            var chaListData = Lists.LoadCSV(stream);
-
-                            SetPossessNew(chaListData);
-
-                            zipmod.CharaLists.Add(chaListData);
+                            long index = (long)_LocateZipEntryMethodInfo.Invoke(arc, new object[] { entry });
+                            zipmod.BundleInfos.Add(new BundleLoadInfo(arc.Name, index, fullName, assetBundlePath));
                         }
+                        else
+                        {
+                            zipmod.BundleInfos.Add(new BundleLoadInfo(arc.Name, -1, fullName, assetBundlePath));
+                        }
+                    }
+                    // Find all list files in the archive
+                    else if (fullName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            if (fullName.StartsWith("abdata/list/characustom", StringComparison.OrdinalIgnoreCase))
+                            {
+                                ChaListData chaListData;
+                                using (var stream = arc.GetInputStream(entry))
+                                    chaListData = Lists.LoadCSV(stream);
+
+                                SetPossessNew(chaListData);
+
+                                zipmod.CharaLists.Add(chaListData);
+                            }
 #if !EC
-                        else if (fullName.StartsWith("abdata/studio/info", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (Path.GetFileNameWithoutExtension(fullName).ToLower().StartsWith("itembonelist_"))
+                            else if (fullName.StartsWith("abdata/studio/info", StringComparison.OrdinalIgnoreCase))
                             {
-                                var stream = arc.GetInputStream(entry);
-                                var studioListData = Lists.LoadStudioCSV(stream, fullName, manifest.GUID);
+                                if (Path.GetFileNameWithoutExtension(fullName).ToLower().StartsWith("itembonelist_"))
+                                {
+                                    Lists.StudioListData studioListData;
+                                    using (var stream = arc.GetInputStream(entry))
+                                        studioListData = Lists.LoadStudioCSV(stream, fullName, manifest.GUID);
 
-                                zipmod.BoneLists.Add(studioListData);
-                            }
-                            else
-                            {
-                                var stream = arc.GetInputStream(entry);
-                                var studioListData = Lists.LoadStudioCSV(stream, fullName, manifest.GUID);
+                                    zipmod.BoneLists.Add(studioListData);
+                                }
+                                else
+                                {
+                                    Lists.StudioListData studioListData;
+                                    using (var stream = arc.GetInputStream(entry))
+                                        studioListData = Lists.LoadStudioCSV(stream, fullName, manifest.GUID);
 
-                                zipmod.StudioLists.Add(studioListData);
+                                    zipmod.StudioLists.Add(studioListData);
+                                }
                             }
-                        }
 #endif
 #if AI || HS2
-                        else if (fullName.StartsWith("abdata/list/map/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var stream = arc.GetInputStream(entry);
-                            var data = Lists.LoadExcelDataCSV(stream, fullName);
-                            zipmod.MapLists.Add(data);
-                        }
+                            else if (fullName.StartsWith("abdata/list/map/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Lists.StudioListData data;
+                                using (var stream = arc.GetInputStream(entry))
+                                    data = Lists.LoadExcelDataCSV(stream, fullName);
+                                zipmod.MapLists.Add(data);
+                            }
 #endif
+                        }
+                        catch (Exception ex)
+                        {
+                            if (strict)
+                                throw new FormatException("Failed to load list file \"" + fullName + "\" from archive \"" +
+                                                          Sideloader.GetRelativeArchiveDir(arc.Name) + "\"", ex);
+                            Sideloader.Logger.LogError($"Failed to load list file \"{fullName}\" from archive \"{Sideloader.GetRelativeArchiveDir(arc.Name)}\" with error: {ex}");
+                        }
                     }
-                    catch (Exception ex)
+                    // Find all png files in the archive
+                    else if (fullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                     {
-                        Sideloader.Logger.LogError($"Failed to load list file \"{fullName}\" from archive \"{Sideloader.GetRelativeArchiveDir(arc.Name)}\" with error: {ex}");
+                        // Only list folders for .pngs in abdata folder, i.e. skip preview pics or character cards that might be included with the mod
+                        if (fullName.StartsWith("abdata/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            zipmod.PngNames.Add(fullName);
+                        }
                     }
                 }
-                // Find all png files in the archive
-                else if (fullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Only list folders for .pngs in abdata folder, i.e. skip preview pics or character cards that might be included with the mod
-                    if (fullName.StartsWith("abdata/", StringComparison.OrdinalIgnoreCase))
-                    {
-                        zipmod.PngNames.Add(fullName);
-                    }
-                }
+            }
+            finally
+            {
+                // Never keep a source zipmod handle alive between actual reads. This also permits
+                // replacing or deleting the parent mod folder, not just the individual archive.
+                zipmod.Dispose();
             }
         }
 
@@ -198,9 +261,47 @@ namespace Sideloader
 
         public AssetBundle LoadBundle()
         {
-            AssetBundle bundle;
+            AssetBundle bundle = null;
 
-            if (CanBeStreamed)
+            // Unity keeps an opaque, non-delete-shared handle alive for bundles loaded directly from
+            // a zipmod. Hot reload loads a content-versioned disk shadow instead: Unity gets its normal
+            // low-overhead file-backed path while the source zipmod remains freely replaceable.
+            if (Sideloader.HotReloadEnabled.Value)
+            {
+                var zipmod = Sideloader.Zipmods[ArchiveFilename];
+                var cachePath = zipmod.WithZipFile(arc =>
+                {
+                    var entry = arc.GetEntry(BundleFullPath);
+                    BundleDiskCache.TryGetOrCreate(zipmod, arc, entry, out var preparedPath);
+                    return preparedPath;
+                });
+
+                if (!string.IsNullOrEmpty(cachePath))
+                {
+                    try
+                    {
+                        if (Sideloader.DebugLogging.Value)
+                            Sideloader.Logger.LogDebug($"Loading \"{BundleFullPath}\" from hot-reload disk cache \"{cachePath}\"");
+                        bundle = AssetBundle.LoadFromFile(cachePath);
+                        if (bundle != null)
+                            BundleDiskCache.Pin(bundle, cachePath);
+                        else
+                            BundleDiskCache.Invalidate(cachePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        BundleDiskCache.Invalidate(cachePath);
+                        Sideloader.Logger.LogWarning($"Failed to load cached bundle \"{BundleFullPath}\"; falling back to memory: {ex.Message}");
+                    }
+                }
+
+                if (bundle == null)
+                {
+                    Sideloader.Logger.LogWarning($"Using memory fallback for \"{BundleFullPath}\" because its disk shadow cache was unavailable");
+                    bundle = LoadBundleFromMemory();
+                }
+            }
+            else if (CanBeStreamed)
             {
                 if (Sideloader.DebugLogging.Value)
                     Sideloader.Logger.LogDebug($"Streaming \"{BundleFullPath}\" ({Sideloader.GetRelativeArchiveDir(ArchiveFilename)}) unity3d file from disk, offset {StreamOffset}");
@@ -210,21 +311,7 @@ namespace Sideloader
             else
             {
                 Sideloader.Logger.LogDebug($"Cannot stream \"{BundleFullPath}\" ({Sideloader.GetRelativeArchiveDir(ArchiveFilename)}) unity3d file from disk, loading to RAM instead");
-
-                var arc = Sideloader.Zipmods[ArchiveFilename].GetZipFile();
-                var entry = arc.GetEntry(BundleFullPath);
-                var stream = arc.GetInputStream(entry);
-
-                byte[] buffer = new byte[entry.Size];
-
-                _ = stream.Read(buffer, 0, (int)entry.Size);
-
-                // The line below can either be commented in or out - it doesn't really matter. 
-                //  - If in: It will generate successive unique CAB-strings for these asset bundles
-                //  - If out: The CAB of the actual asset bundle will be used if possible, otherwise a random CAB is generated by the Resource Redirector due to the call to 'ResourceRedirection.EnableRandomizeCabIfConflict(-2000, false)'
-                //BundleManager.RandomizeCAB(buffer);
-
-                bundle = AssetBundleHelper.LoadFromMemory($"\"{BundleFullPath}\" ({Sideloader.GetRelativeArchiveDir(ArchiveFilename)})", buffer, 0);
+                bundle = LoadBundleFromMemory();
             }
 
             if (bundle == null)
@@ -233,6 +320,30 @@ namespace Sideloader
             }
 
             return bundle;
+        }
+
+        private AssetBundle LoadBundleFromMemory()
+        {
+            var zipmod = Sideloader.Zipmods[ArchiveFilename];
+            return zipmod.WithZipFile(arc =>
+            {
+                var entry = arc.GetEntry(BundleFullPath);
+                var bufferLength = checked((int)entry.Size);
+                var buffer = new byte[bufferLength];
+                using (var stream = arc.GetInputStream(entry))
+                {
+                    var bytesRead = 0;
+                    while (bytesRead < bufferLength)
+                    {
+                        var read = stream.Read(buffer, bytesRead, bufferLength - bytesRead);
+                        if (read == 0)
+                            throw new EndOfStreamException($"Unexpected end of zipmod entry {BundleFullPath}");
+                        bytesRead += read;
+                    }
+                }
+
+                return AssetBundleHelper.LoadFromMemory($"\"{BundleFullPath}\" ({Sideloader.GetRelativeArchiveDir(ArchiveFilename)})", buffer, 0);
+            });
         }
     }
 }
