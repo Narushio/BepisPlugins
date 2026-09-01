@@ -92,6 +92,26 @@ namespace Sideloader.AutoResolver
             slotList.Add(resolveInfo);
         }
 
+        internal static void RemoveStudioResolutionInfos(ICollection<string> guids)
+        {
+            var guidSet = new HashSet<string>(guids, StringComparer.OrdinalIgnoreCase);
+            _LoadedStudioResolutionInfos.RemoveAll(x => guidSet.Contains(x.GUID));
+            RebuildStudioResolutionLookups();
+        }
+
+        internal static void RebuildStudioResolutionLookups()
+        {
+            StudioResolutionInfoLocalSlotLookup.Clear();
+            StudioResolutionInfoGuidLookup.Clear();
+            _lastLoadedStudioResolutionInfoCount = 0;
+
+            foreach (var info in _LoadedStudioResolutionInfos)
+            {
+                AddToLookups(info);
+                _lastLoadedStudioResolutionInfoCount++;
+            }
+        }
+
 
         private static bool IsResolveItem(StudioResolveInfo sri) => sri.ResolveItem;
         private static readonly ICollection<StudioResolveInfo> _EmptyResolveInfos = new StudioResolveInfo[0];

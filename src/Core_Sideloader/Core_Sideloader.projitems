@@ -17,7 +17,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.ReflectionHelper.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.ListLoader.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.BundleManager.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.BundleDiskCache.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.HotReload.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.HotReloadGui.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.Hooks.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.Manifest.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Core.Sideloader.ManifestVersionComparer.cs" />

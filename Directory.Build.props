@@ -1,7 +1,12 @@
 <Project>
 	<PropertyGroup>
 		<!-- This is the master version, only change this one -->
-		<Version>21.1.3</Version>
+    <Version>21.1.3.19</Version>
+		<!-- Preserve the assembly identity used by released BepisPlugins builds so existing plugins keep binding. -->
+		<AssemblyVersion>1.0.0.0</AssemblyVersion>
+		<FileVersion>$(Version)</FileVersion>
+		<InformationalVersion>$(Version)</InformationalVersion>
+		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
 		<!-- Sets the 'Company' field on the dll file -->
 		<Authors>https://github.com/IllusionMods/BepisPlugins</Authors>
@@ -15,6 +20,8 @@
 		<RootNamespace>BepisPlugins</RootNamespace>
 
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<!-- Keep all generated trees excluded when release builds use obj\standard or obj\legacy. -->
+		<DefaultItemExcludes>$(DefaultItemExcludes);obj\**</DefaultItemExcludes>
 
 		<OutputType>Library</OutputType>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -37,7 +44,7 @@
 		<None Include="..\..\LICENSE" Link="LICENSE" Visible="false">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
-		<None Include="..\..\README.md" Link="README.md" Visible="false">
+		<None Include="..\..\README.md" Link="README.md" Visible="false" Condition="Exists('..\..\README.md')">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
 	</ItemGroup>
