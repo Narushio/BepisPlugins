@@ -31,6 +31,8 @@ This extension targets Koikatu/CharaStudio (`KK`) only; it is not a Koikatsu Sun
 
 Hot reload updates future loads; objects already instantiated in a character or scene are not forcibly replaced. Reload the card, coordinate, scene, or affected item when necessary. Some CharaStudio menus and third-party plugin caches may still require a restart.
 
+License: This fork follows the original project's [LGPL-3.0 license](https://github.com/IllusionMods/BepisPlugins#LGPL-3.0-1-ov-file).
+
 ### 日本語
 
 このフォークは、Koikatu 向け Sideloader に実行時 zipmod ホットリロードを追加した BepisPlugins の二次開発版です。MOD の開発やライブラリ整理の際に、ファイルを変更するたびゲームを再起動する手間を減らすことを目的としています。
@@ -55,6 +57,8 @@ Hot reload updates future loads; objects already instantiated in a character or 
 
 ホットリロードは以後の読み込みに反映されます。キャラクターやシーンですでに生成済みのオブジェクトは強制置換されないため、必要に応じてカード、コーディネート、シーン、または対象アイテムを再読み込みしてください。CharaStudio の一部メニューや他プラグイン独自のキャッシュは、再起動が必要な場合があります。
 
+ライセンス：このフォークは原プロジェクトの [LGPL-3.0 license](https://github.com/IllusionMods/BepisPlugins#LGPL-3.0-1-ov-file) に従います。
+
 ### 简体中文
 
 本分支是对 BepisPlugins 中 Koikatu Sideloader 的二次开发，增加了运行时 zipmod 热重载，主要用于 MOD 开发和模组库维护，减少每次修改文件后都要重启游戏的等待。
@@ -78,6 +82,8 @@ Hot reload updates future loads; objects already instantiated in a character or 
 此扩展仅适用于 Koikatu/CharaStudio（`KK`），不适用于 Koikatsu Sunshine（`KKS`）或其他游戏。请只安装一个与游戏现有 BepInEx、Extended Save 代际匹配的 Sideloader，不能同时放置标准版和旧环境版 DLL，也不要混用不同整合包中的 Extended Save DLL 或补丁器。运行时压缩包依赖为 SharpZipLib `0.86.0.518`，应由匹配的发布包与 Sideloader 一同提供。首次安装或更换插件 DLL 后必须完整重启游戏；之后修改 `.zipmod` / `.zip` 时才可以使用热重载。
 
 热重载会影响之后的资源加载；角色或场景中已经实例化的对象不会被强制替换。必要时请重新加载角色卡、服装卡、场景或重新选择对应物品。CharaStudio 的部分菜单以及其他插件自己的缓存仍可能需要重启后才能完全刷新。
+
+许可证：本分支遵循原项目的 [LGPL-3.0 license](https://github.com/IllusionMods/BepisPlugins#LGPL-3.0-1-ov-file)。
 
 ### How to install
 1. Install the latest version of [BepInEx](https://github.com/BepInEx/BepInEx). Make sure it is installed and working before installing BepisPlugins.
